@@ -46,27 +46,7 @@
 
 #include <helper_cuda.h>
 #include <helper_string.h>
-
-bool printfNPPinfo(int argc, char *argv[])
-{
-    const NppLibraryVersion *libVer = nppGetLibVersion();
-
-    printf("NPP Library Version %d.%d.%d\n", libVer->major, libVer->minor,
-           libVer->build);
-
-    int driverVersion, runtimeVersion;
-    cudaDriverGetVersion(&driverVersion);
-    cudaRuntimeGetVersion(&runtimeVersion);
-
-    printf("  CUDA Driver  Version: %d.%d\n", driverVersion / 1000,
-           (driverVersion % 100) / 10);
-    printf("  CUDA Runtime Version: %d.%d\n", runtimeVersion / 1000,
-           (runtimeVersion % 100) / 10);
-
-    // Min spec is SM 1.0 devices
-    bool bVal = checkCudaCapabilities(1, 0);
-    return bVal;
-}
+#include <utils.h>
 
 int main(int argc, char *argv[])
 {
@@ -101,6 +81,7 @@ int main(int argc, char *argv[])
         {
             sFilename = "Lena.pgm";
         }
+        std::cout << "sFilename: " << sFilename << std::endl;
 
         // if we specify the filename at the command line, then we only test
         // sFilename[0].
@@ -155,26 +136,39 @@ int main(int argc, char *argv[])
         npp::ImageNPP_8u_C1 oDeviceSrc(oHostSrc);
 
         // create struct with the ROI size
-        NppiSize oSrcSize = {(int)oDeviceSrc.width(), (int)oDeviceSrc.height()};
+        NppiRect oSrcSize = {0, 0, (int)oDeviceSrc.width(), (int)oDeviceSrc.height()};
         NppiPoint oSrcOffset = {0, 0};
         NppiSize oSizeROI = {(int)oDeviceSrc.width(), (int)oDeviceSrc.height()};
 
         // Calculate the bounding box of the rotated image
-        NppiRect oBoundingBox;
+        double aBoundingBox[2][2];
         double angle = 45.0; // Rotation angle in degrees
-        NPP_CHECK_NPP(nppiGetRotateBound(oSrcSize, angle, &oBoundingBox));
+        double nShiftX = 0.0; // No horizontal shift
+        double nShiftY = 0.0; // No vertical shift
+        NPP_CHECK_NPP(nppiGetRotateBound(oSrcSize, aBoundingBox, angle, nShiftX, nShiftY));
+
+        // Calculate the dimensions of the rotated image from the bounding box
+        int rotatedWidth = (int)(aBoundingBox[1][0] - aBoundingBox[0][0] + 0.5);
+        int rotatedHeight = (int)(aBoundingBox[1][1] - aBoundingBox[0][1] + 0.5);
 
         // allocate device image for the rotated image
-        npp::ImageNPP_8u_C1 oDeviceDst(oBoundingBox.width, oBoundingBox.height);
+        npp::ImageNPP_8u_C1 oDeviceDst(rotatedWidth, rotatedHeight);
 
         // Set the rotation point (center of the image)
         NppiPoint oRotationCenter = {(int)(oSrcSize.width / 2), (int)(oSrcSize.height / 2)};
 
+        // Create source and destination ROI rectangles
+        NppiRect oSrcROI = {0, 0, (int)oDeviceSrc.width(), (int)oDeviceSrc.height()};
+        NppiRect oDstROI = {0, 0, rotatedWidth, rotatedHeight};
+
+        // Create source size structure
+        NppiSize oSrcSizeStruct = {(int)oDeviceSrc.width(), (int)oDeviceSrc.height()};
+
         // run the rotation
         NPP_CHECK_NPP(nppiRotate_8u_C1R(
-            oDeviceSrc.data(), oSrcSize, oDeviceSrc.pitch(), oSrcOffset,
-            oDeviceDst.data(), oDeviceDst.pitch(), oBoundingBox, angle, oRotationCenter,
-            NPPI_INTER_NN));
+            oDeviceSrc.data(), oSrcSizeStruct, oDeviceSrc.pitch(), oSrcROI,
+            oDeviceDst.data(), oDeviceDst.pitch(), oDstROI,
+            angle, nShiftX, nShiftY, NPPI_INTER_NN));
 
         // declare a host image for the result
         npp::ImageCPU_8u_C1 oHostDst(oDeviceDst.size());
